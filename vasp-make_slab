@@ -1,0 +1,120 @@
+#!/bin/bash
+
+# Copyright: Norbert Janik (norbert.janik@protonmail.com)
+
+###################################################################################################################
+##    The code should be run in directory with VASP bulk calculation files
+##    and run with parameters.
+##    As a result it produces INCAR, KPOINTS and POSCAR ready for slab calculations
+###################################################################################################################
+
+# options handling
+while [ -n "$1" ]; do
+
+        case "$1" in
+# setting up number of cell as slab width taken to calculations
+        -w) if [[ $2 =~ ^[0-9]+$ ]]
+            then
+#               echo "number of processors set to $2"
+                width=$2
+            else
+                echo "-w is the width of slab given by number cells, thus must be positive integer"
+                exit
+            fi
+                ;;
+# setting up number of cells in material width
+        -s) if [[ $2 =~ ^[0-9]+$ ]]
+            then
+#               echo "number of processors set to $2"
+                slab=$2
+            else
+                echo "-s is the width of material given by number cells, thus must be positive integer"
+                exit
+            fi
+                ;;
+        esac
+
+        shift
+
+done
+
+#checking whether user set number of cores, if not, setting default value
+if [ -z "$width" ]
+then
+        width=10
+fi
+
+if [ -z "$slab" ]
+then
+        slab=5
+fi
+
+if [ $slab -gt $width ]
+then
+        echo "Material cannot be wider than whole slab!"
+        exit
+fi
+
+if [ ! -f "POSCAR" ]
+then
+        echo "There is no POSCAR file!"
+        exit
+fi
+
+if [ ! -f "KPOINTS" ]
+then
+        echo "There is no KPOINTS file!"
+        exit
+fi
+
+awk -v width="$width" -v slab="$slab" '
+	BEGIN{atoms=0}
+	{
+		if(NR==5)
+		{
+			print " "$1"   "$2"   "$3*width
+			cell=$3
+		}
+		else if(NR==6)
+		{
+			print "  "$1*slab" "$2*slab
+		}
+		else if($1=="Direct")
+		{
+			atoms=1
+			print $0
+		}
+		else if(atoms==1)
+		{
+			for(i=0;i<slab;i++)
+			{
+				print "   "$1"    "$2"    "$3/width+i/width
+			}
+		}
+		else
+		{
+			print $0
+		}
+	}
+	END{}
+' POSCAR > POSCAR_new
+
+mv POSCAR POSCAR_old
+mv POSCAR_new POSCAR
+
+awk -v width="$width" '
+	function ceil(x, y){y=int(x); return(x>y?y+1:y)}
+	{
+		if($1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/)
+		{
+			print $1" "$2" "ceil($3/width)
+		}
+		else
+		{
+			print $0
+		}
+	}
+' KPOINTS > KPOINTS_new
+
+mv KPOINTS KPOINTS_old
+mv KPOINTS_new KPOINTS

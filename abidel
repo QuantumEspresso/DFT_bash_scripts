@@ -1,0 +1,4 @@
+#!/bin/bash
+
+rm *.e* *.o* *.stdout.txt *.tar.bz2
+rm -r abinit-*

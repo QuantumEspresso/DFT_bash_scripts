@@ -1,0 +1,7 @@
+#!/bin/bash
+
+# script untars all *tar.bz2 files in directory from which it is executed and all subdirectories
+# it untars in directory where archives are
+
+find ./ -name '*tar.bz2' -o -name '*tar.gz' -exec sh -c 'dir=$(dirname "$0"); tar -xvf "${0}" -C "${dir}" && rm "${0}"' {} \;
+

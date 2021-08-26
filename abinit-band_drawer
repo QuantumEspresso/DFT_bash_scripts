@@ -1,0 +1,194 @@
+#!/bin/bash
+
+# Copyright: Norbert Janik (norbert.janik@protonmail.com)
+
+# it searches all subfolders and for all *.out files to plots disperssion relation
+# script arguments are starting band to plot, ending band to plot and optional string to plot with k-path distance on x axis
+
+# assigning provided arguments to variables
+if [[ -z "$1" ]]
+then
+	start=1
+	stop=0
+	k=1
+elif [[ "$1" == "k" ]]
+then
+	start=1
+	stop=0
+	k=2
+else
+	if [[ !("$1" =~ ^[0-9]+$) ]]
+	then
+		echo "invalid first argument"
+		exit
+	else
+		if [[ "$2" == "k" ]]
+		then
+			start=1
+			stop=$1
+			k=2
+		elif [[ -z "$2" ]]
+		then
+			start=1
+			stop=$1
+			k=1
+		elif [[ !("$2" =~ ^[0-9]+$) ]]
+		then
+			echo "invalid second argument"
+			exit
+		else
+			if [[ "$3" == "k" ]]
+			then
+				if (( $2 < $1 ))
+				then
+					echo $(($2 + 0))
+					echo "Stop ($2) cannot be smaller than start ($1)!"
+					exit
+				elif [[ $1 != 0 ]]
+				then
+					start=$1
+					stop=$2
+					k=2
+				else
+					start=1
+					stop=$2
+					k=2
+				fi
+			elif [[ -z "$3" ]]
+			then
+				if (( $2 < $1 ))
+				then
+					echo "Stop cannot be smaller than start!"
+					exit
+				elif [[ $1 != 0 ]]
+				then
+					start=$1
+					stop=$2
+					k=1
+				else
+					start=1
+					stop=$2
+					k=1
+				fi
+			else
+				echo "invalid third argument"
+				exit
+			fi
+		fi
+	fi
+fi
+
+if [[ ! -z "$4" ]]
+then
+	echo "Ignoring all arguments above three"
+fi
+
+current_dir=$(pwd)
+all_files=()
+dir_of_files=()
+
+while IFS=  read -r -d $'\0'; do
+	all_files+=("$REPLY")
+done < <(find . -name '*.out' -print0)
+
+dir_of_files=($(echo "${all_files[@]%/*}" | tr ' ' '\n' | sort -u | tr '\n' ' '))
+
+#for i in "${dir_of_files[@]}"; do
+#	echo ${i%/*}	# delete the part after last slash
+#	echo ${i##*/}	# retain the part after last slash
+#done
+
+for DIR in "${dir_of_files[@]}"
+do
+	cd ${DIR}
+	for FILE in *.out; do
+		awk '
+		BEGIN{
+			check_read=0;
+			temp_k=0;
+			fermi=0;
+		}
+		{
+	# searching for inverted lattice constants
+			if($5=="G(1)=")
+			{
+				g11=$6*6.28318530718;
+				g12=$7*6.28318530718;
+				g13=$8*6.28318530718
+			}
+			if($5=="G(2)=")
+			{
+				g21=$6*6.28318530718;
+				g22=$7*6.28318530718;
+				g23=$8*6.28318530718
+			}
+			if($5=="G(3)=")
+			{
+				g31=$6*6.28318530718;
+				g32=$7*6.28318530718;
+				g33=$8*6.28318530718
+			}
+	# searching for filename		
+			if($1=="prteigrs")
+				out_file=substr($7, 1, length($7)-4)
+	# searching for Fermi energy (hartree)
+			if($1=="fermie")
+				fermi=$3*27.211396641308
+			if($1=="Fermi")
+				fermi=$7
+	# reset k path and set read flag
+			if( ($0 == "================================================================================" || $1 == "==") && check_read==2 )
+			{
+				check_read=0;
+				temp_k=0;
+			}
+	# setting right flags
+		if($1=="Non-SCF")
+			check_read=1
+		if($1=="Eigenvalues" && check_read==1)
+			check_read=2
+	# tracking k point and k path
+			if($1=="kpt#" && check_read==2)
+			{
+	# storage of previous k-point
+				temp_next_k=$8" "$9" "$10;
+				if($2=="1,")
+				{
+					temp_prev_k=$8" "$9" "$10
+				}
+				split(temp_prev_k, temp_kpt1," ");
+				split(temp_next_k, temp_kpt2," ");
+				kx=sqrt( (temp_kpt1[1]-temp_kpt2[1])^2 );
+				ky=sqrt( (temp_kpt1[2]-temp_kpt2[2])^2 );
+				kz=sqrt( (temp_kpt1[3]-temp_kpt2[3])^2 );
+				k_new = (kx*g11+ky*g21+kz*g31)^2+(kx*g12+ky*g22+kz*g32)^2+(kx*g13+ky*g23+kz*g33)^2;
+				if(k_new <= 0.2)
+					temp_k = temp_k + k_new;
+				temp_prev_k=temp_next_k;
+				printf("\n%d\t%f\t",substr($2, 1, length($2)-1),temp_k) > out_file".data";
+			}
+	# printing to file chosen eigenvalues
+			if(check_read==2 && $1!="kpt#" && $1!="Eigenvalues")
+			{
+				for(i=1; i<=NF; i++)
+					printf("%f\t",$i-fermi) > out_file".data";
+			}
+		}' $FILE
+	done
+	sed -i -e "1d" *data
+	for i in *.data; do
+		N=$(awk 'NR==1{print NF}' $i)
+		if (( $N > $stop && $stop != 0 ))
+		then
+			N=$stop
+		fi
+		R=$(awk '{num++}END{print num}' $i)
+		if (( $R > 1 ))
+		then
+			gnuplot -e "set t pdfcairo;set o '${i%.*}.pdf';stats '$i' nooutput;set key noautotitle;plot for [i=$(($start+2)):$N] '$i' u $k:i w l lc rgb \"black\""
+		else
+			rm $i
+		fi
+	done
+	cd "$current_dir"
+done

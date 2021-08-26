@@ -1,0 +1,130 @@
+#!/bin/bash
+
+# Copyright: Norbert Janik (norbert.janik@protonmail.com)
+
+###################################################################################
+####################            FUNCTIONALITY             #########################
+###################################################################################
+#
+# Arguments:
+#
+# One can specify max 1 arguments.
+# First is atom number which orbital impact is drawn (atX, where 'X' is number of atom)
+#
+# What it does:
+#
+# Script is searching current directory and all subdirectories for fatband files and draws them according to parameters given to script along with DOS
+###################################################################################
+
+# assigning provided arguments to variables
+
+if [[ -z "$1" ]]
+then
+	atom=0
+elif [[ "$1" == "at"* && ($(cut -d "t" -f2 <<< "$1") =~ ^[0-9]+$) && $(cut -d "t" -f2 <<< "$1") -gt 0 ]]
+then
+	atom=$(cut -d "t" -f2 <<< "$1")
+else
+	if [[ !("$1" =~ ^[0-9]+$) ]]
+	then
+		echo "invalid first argument"
+		exit
+	fi
+fi
+
+if [[ ! -z "$2" ]]
+then
+	echo "Ignoring all arguments above first"
+fi
+
+# searching all subdirectories for FATBANDS files, storing them and sorting
+current_dir=$(pwd)
+all_files=()
+dir_of_files=()
+
+while IFS=  read -r -d $'\0'; do
+	all_files+=("$REPLY")
+done < <(find . -name 'PROCAR' -print0)
+
+dir_of_files=($(echo "${all_files[@]%/*}" | tr ' ' '\n' | sort -u | tr '\n' ' '))
+
+# we move to location of each found *FATBANDS* files
+for DIR in "${dir_of_files[@]}"
+do
+	cd ${DIR}
+	# check if data file exist and delete it
+	count=`ls -1 fatband* 2>/dev/null | wc -l`
+	if [ $count != 0 ];then
+		rm fatband*
+	fi
+	# getting crucial parameters (number of atoms and bands to proceed, fermi energy)
+	max_atom=$(sed '2q;d' "PROCAR" | awk  '{print $12}')
+	fermi=$(awk '{if($1=="E-fermi")print $3}' OUTCAR)
+	nelect=$(awk '{if($1=="NELECT")print $3}' OUTCAR)
+	nelect=${nelect%%.*}
+	start=$(($nelect-6))
+	bands=$(($nelect+6))
+	
+	# check the max band number
+	max_bands=$(sed '2q;d' "PROCAR" | awk  '{print $8}')
+	if [ $max_bands -lt $bands ]; then
+		bands=$max_bands
+	fi
+#######   Collecting data for each chosen atom   #########
+	for at in $( seq 1 $max_atom )
+	do
+		if [ $atom -eq 0 ] || [ $atom -gt $max_atom ] || [ $atom -eq $at ]; then
+			# collect data band by band (VASP has really unpleasand file structure...)
+			for band in $( seq $start $bands )
+			do
+				awk -v band="$band" -v atom="$at"  -v fermi="$fermi" '
+				BEGIN{ion=0; printf "\n\n# k\tband_%d\ts\tp\td\n",band >> "fatband"atom".data"}
+				{
+					if($1=="k-point")
+					{
+						k=$2
+						k_x=$4
+						k_y=$5
+						k_z=$6
+					}
+					if($1=="band" && $2==band)
+					{
+						bnd=$5-fermi
+						ion=1
+						s=0
+						p=0
+						d=0
+					}
+					if($1=="tot" && ion==1)
+					{
+						ion=0
+						printf "%d\t%f\t%f\t%f\t%f\n",k,bnd,s,p,d >> "fatband"atom".data"
+					}
+					if( ion==1 && ($1==atom) && $1 ~ /^[0-9]+$/ )
+					{
+						s=s+$11
+					}
+				}' "PROCAR"
+			done
+			sed -i 1,2d "fatband"$at".data"
+			# collecting DOS data
+			awk -v atom="$at" -v fermi="$fermi" '
+			BEGIN{atm_num=0}
+			{
+				if(NR>6 && NF==5)
+					atm_num++;
+				if(NR>6 && NF>5 && atm_num==atom)
+				{
+					sum=0
+					for(i=2;i<=NF;i++)
+						sum+=$i
+					print $1-fermi, sum > "dos"atom".data"
+				}
+			}' "DOSCAR"
+			# drawing fatbands
+			gnuplot -e "set t cairolatex header \"\\\usepackage{tikz}\\n\\\usetikzlibrary{fadings}\" standalone size 6,3 lw 2; set o 'fatband$at.tex'; set key noautotitle; set yrange [-5:5]; set xrange [1:250]; set xtics (\"Y\" 1, \"\$\\\Gamma\$\" 50, \"X\" 100, \"U\" 150, \"Z\" 200, \"\$\\\Gamma\$\" 250); set xtics scale 30; set ylabel '\$E-E_F\\\ (eV)\$'; stats 'fatband$at.data' matrix every ::2::5 nooutput; scale=5; blocks = $bands-$start; set multiplot layout 1, 2; set size 0.8,1; set origin 0,0; plot for [in=0:blocks-1] 'fatband$at.data' i in u 1:2 w l lc rgb \"black\", for [in=0:blocks-1] 'fatband$at.data' i in u 1:2:(\$3*scale) with circles pt 7 ps 0.5 lc \"red\"; set size 0.2,1; set origin 0.735,0; set xtics ( \" \" 0); set ytics ( \" \" -10); set noylabel; stats [-5:5] 'dos$at.data' u 1:2 nooutput; set xrange [0:STATS_max_y]; plot 'dos$at.data' u 2:1 w l lc \"black\"; unset multiplot"
+			pdflatex "fatband$at.tex"
+		fi
+	done
+	cd "$current_dir"
+done

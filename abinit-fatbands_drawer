@@ -1,0 +1,249 @@
+#!/bin/bash
+
+# Copyright: Norbert Janik (norbert.janik@protonmail.com)
+
+###################################################################################
+####################            FUNCTIONALITY             #########################
+###################################################################################
+#
+# Arguments:
+#
+# One can specify max 3 arguments.
+# First is starting band to draw (positive integer)
+# Second is last band to draw (positive integer)
+# Third is atom number which orbital impact is drawn (atX, where 'X' is number of atom)
+# 
+# If only one integer is given, then all bands up to specified number is drawn
+#
+#
+# What it does:
+#
+# Script is searching current directory and all subdirectories for fatband files and draws them according to parameters given to script.
+###################################################################################
+
+# assigning provided arguments to variables
+
+if [[ -z "$1" ]]
+then
+	start=1
+	stop=0
+	atom=0
+elif [[ "$1" == "at"* && ($(cut -d "t" -f2 <<< "$1") =~ ^[0-9]+$) && $(cut -d "t" -f2 <<< "$1") -gt 0 ]]
+then
+	start=1
+	stop=0
+	atom=$(cut -d "t" -f2 <<< "$1")
+else
+	if [[ !("$1" =~ ^[0-9]+$) ]]
+	then
+		echo "invalid first argument"
+		exit
+	else
+		if [[ "$2" == "at"* && ($(cut -d "t" -f2 <<< "$2") =~ ^[0-9]+$) && $(cut -d "t" -f2 <<< "$2") -gt 0 ]]
+		then
+			start=1
+			stop=$1
+			atom=$(cut -d "t" -f2 <<< "$2")
+		elif [[ -z "$2" ]]
+		then
+			start=1
+			stop=$1
+			atom=0
+		elif [[ !("$2" =~ ^[0-9]+$) ]]
+		then
+			echo "invalid second argument"
+			exit
+		else
+			if [[ "$3" == "at"* && ($(cut -d "t" -f2 <<< "$3") =~ ^[0-9]+$) && $(cut -d "t" -f2 <<< "$3") -gt 0 ]]
+			then
+				if (( $2 < $1 ))
+				then
+					echo "Last band ($2) cannot be smaller than starting band ($1) to draw!"
+					exit
+				elif [[ $1 != 0 ]]
+				then
+					start=$1
+					stop=$2
+					atom=$(cut -d "t" -f2 <<< "$3")
+				else
+					start=1
+					stop=$2
+					atom=$(cut -d "t" -f2 <<< "$3")
+				fi
+			elif [[ -z "$3" ]]
+			then
+				if (( $2 < $1 ))
+				then
+					echo "Last band ($2) cannot be smaller than starting band ($1) to draw!"
+					exit
+				elif [[ $1 != 0 ]]
+				then
+					start=$1
+					stop=$2
+					atom=0
+				else
+					start=1
+					stop=$2
+					atom=0
+				fi
+			else
+				echo "invalid third argument"
+				exit
+			fi
+		fi
+	fi
+fi
+
+if [[ ! -z "$4" ]]
+then
+	echo "Ignoring all arguments above three"
+fi
+
+# searching all subdirectories for FATBANDS files, storing them and sorting
+current_dir=$(pwd)
+all_files=()
+dir_of_files=()
+
+while IFS=  read -r -d $'\0'; do
+	all_files+=("$REPLY")
+done < <(find . -name '*_FATBANDS_at0001*l0000' -print0)
+
+dir_of_files=($(echo "${all_files[@]%/*}" | tr ' ' '\n' | sort -u | tr '\n' ' '))
+
+# we move to location of each found *FATBANDS* files
+for DIR in "${dir_of_files[@]}"
+do
+	cd ${DIR}
+	#we check how many different datasets there are
+	for FILE in *_FATBANDS_at0001*l0000; do
+		# first, we create a file for storage of band structure
+		bands=$(awk 'BEGIN{bands=0}{if($2=="BAND" && bands<$5)bands=$5}END{print bands}' $FILE)
+		if (( $stop == 0 )); then
+			stop=$bands
+		fi
+		awk -v start="$start" -v stop="$stop" -v file_name="${FILE%%_FATBANDS*}" '
+		BEGIN{write=0}
+		{
+			if($2 == "BAND" && $5 >= start && $5 <= stop )
+			{
+				write=1;
+				print "\n\n# k\tband_" $5" s p d f" > file_name"_fatbnd.data"
+			}
+			else if($2 == "BAND" && ($5 < start || $5 > stop))
+			{
+				write=0
+			}
+			else if($1 ~ /^[0-9]+$/ && NF != 0 && write==1)
+			{
+				print $1 "\t" $2 "\t0\t0\t0\t0" > file_name"_fatbnd.data"
+			}
+		}' $FILE
+		sed -i 1,2d "${FILE%%_FATBANDS*}_fatbnd.data"
+
+		# and for each dataset we operate on every FATBANDS file for that dataset of chosen atom to gather orbital composition
+		for BAND_FILE in ${FILE%"FATBANDS"*}*FATBANDS*; do
+			current_atom=${BAND_FILE#*at}
+			current_atom=${current_atom%%_*}
+			if (( $atom == $current_atom )) || (( $atom == 0 )); then
+				orbital=${BAND_FILE##*l}
+				awk -v start="$start" -v stop="$stop" -v file_name="$BAND_FILE" 'BEGIN{it1=0; write=0; it2=0; band=start-1}
+					{
+						if (NR==FNR){
+							if($2 == "BAND" && $5 >= start && $5 <= stop )
+							{
+								write=1;
+							}
+							else if($2 == "BAND" && ($5 < start || $5 > stop))
+							{
+								write=0
+							}
+							else if($1 ~ /^[0-9]+$/ && NF != 0 && write==1)
+							{
+								it1++;
+								A[it1]=$3
+							}
+						}
+						else{
+							it2++;
+							B_k[it2]=$1
+							B_E[it2]=$2
+							B_s[it2]=$3
+							B_p[it2]=$4
+							B_d[it2]=$5
+							B_f[it2]=$6
+						}
+					}
+					END{
+						it=0
+						switch (substr( file_name, length(file_name), length(file_name) ))
+						{
+						case "0":
+							for(i in B_k)
+							if(B_k[i]~/#/){
+								band++;
+								print "# k\tband_" band " s p d f" > "temp"}
+							else if(B_k[i]=="")
+								print "" > "temp"
+							else
+							{
+								it++;
+								print B_k[i] "\t" B_E[i] "\t" B_s[i]+A[it] "\t" B_p[i] "\t" B_d[i] "\t" B_f[i] > "temp"
+							} 
+							break
+						case "1":
+							for(i in B_k)
+							if(B_k[i]~/#/){
+								band++;
+								print "# k\tband_" band " s p d f" > "temp"}
+							else if(B_k[i]=="")
+								print "" > "temp"
+							else
+							{
+								it++;
+								print B_k[i] "\t" B_E[i] "\t" B_s[i] "\t" B_p[i]+A[it] "\t" B_d[i] "\t" B_f[i] > "temp"
+							} 
+							break
+						case "2":
+							for(i in B_k)
+							if(B_k[i]~/#/){
+								band++;
+								print "# k\tband_" band " s p d f" > "temp"}
+							else if(B_k[i]=="")
+								print "" > "temp"
+							else
+							{
+								it++;
+								print B_k[i] "\t" B_E[i] "\t" B_s[i] "\t" B_p[i] "\t" B_d[i]+A[it] "\t" B_f[i] > "temp"
+							} 
+							break
+						case "3":
+							for(i in B_k)
+							if(B_k[i]~/#/){
+								band++;
+								print "# k\tband_" band " s p d f" > "temp"}
+							else if(B_k[i]=="")
+								print "" > "temp"
+							else
+							{
+								it++;
+								print B_k[i] "\t" B_E[i] "\t" B_s[i] "\t" B_p[i] "\t" B_d[i] "\t" B_f[i]+A[it] > "temp"
+							} 
+							break
+						}
+					}
+				' $BAND_FILE "${FILE%%_FATBANDS*}_fatbnd.data"
+				mv -f temp "${FILE%%_FATBANDS*}_fatbnd.data"
+			fi
+		done
+		gnuplot -e "set t cairolatex header \"\\\usepackage{tikz}\n\\\usetikzlibrary{fadings}\" standalone lw 2; set o '${FILE%%_FATBANDS*}.tex'; set key noautotitle; stats '${FILE%%_FATBANDS*}_fatbnd.data' matrix every ::2::5 nooutput; blocks = $stop-$start; rgb(r,g,b) = 65536 * int(r/STATS_max*256) + 256 * int(g/STATS_max*256) + int(b/STATS_max*256); plot for [in=0:blocks-1] '${FILE%%_FATBANDS*}_fatbnd.data' i in u 1:2 w l lc rgb \"black\", for [in=0:blocks-1] '${FILE%%_FATBANDS*}_fatbnd.data' i in u 1:2:(rgb(\$3,\$4,\$5)) with points pt 7 ps 0.5 lc rgb variable"
+		awk '{
+			if($1=="\\gplfronttext")
+				print "\t\\gplfronttext\n\t\\put(5850,3135){\n\t\t\\begin{tikzpicture}\n\t\t\\filldraw[fill=white, draw=black] (0,0) rectangle (1.72,1.73);\n\t\t\\end{tikzpicture}\n\t}\n\t\\put(6020,3300){\n\t\t\\begin{tikzpicture}\n\t\t\\fill[blue] (90:0.7) -- (210:0.7) -- (-30:0.7) -- cycle;\n\t\t\\fill[green,path fading=west] (90:0.7) -- (210:0.7) -- (-30:0.7) -- cycle;\n\t\t\\fill[red,path fading=south] (90:0.7) -- (210:0.7) -- (-30:0.7) -- cycle;\n\t\t\\end{tikzpicture}\n\t}\n\t\\put(6440,4000){\\makebox(0,0){\\strut{}s}}%\n\t\\csname LTb\\endcsname%%\n\t\\put(6830,3300){\\makebox(0,0){\\strut{}p}}%\n\t\\csname LTb\\endcsname%%\n\t\\put(6020,3300){\\makebox(0,0){\\strut{}d}}%\n\t\\csname LTb\\endcsname%%" > "temp"
+			else
+				print $0 > "temp"
+		}' "${FILE%%_FATBANDS*}.tex"
+		mv -f temp "${FILE%%_FATBANDS*}.tex"
+		pdflatex "${FILE%%_FATBANDS*}.tex"
+	done
+	cd "$current_dir"
+done

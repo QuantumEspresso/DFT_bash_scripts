@@ -1,0 +1,174 @@
+#!/bin/bash
+
+# Copyright: Norbert Janik (norbert.janik@protonmail.com)
+
+###################################################################################
+####################            FUNCTIONALITY             #########################
+###################################################################################
+#
+# Arguments:
+#
+# One can specify max 3 arguments.
+# First is starting band to draw (positive integer)
+# Second is last band to draw (positive integer)
+# Third is atom number which orbital impact is drawn (atX, where 'X' is number of atom)
+# 
+# If only one integer is given, then all bands up to specified number is drawn
+#
+#
+# What it does:
+#
+# Script is searching current directory and all subdirectories for fatband files and draws them according to parameters given to script.
+###################################################################################
+
+# assigning provided arguments to variables
+
+if [[ -z "$1" ]]
+then
+	start=1
+	stop=0
+	atom=0
+elif [[ "$1" == "at"* && ($(cut -d "t" -f2 <<< "$1") =~ ^[0-9]+$) && $(cut -d "t" -f2 <<< "$1") -gt 0 ]]
+then
+	start=1
+	stop=0
+	atom=$(cut -d "t" -f2 <<< "$1")
+else
+	if [[ !("$1" =~ ^[0-9]+$) ]]
+	then
+		echo "invalid first argument"
+		exit
+	else
+		if [[ "$2" == "at"* && ($(cut -d "t" -f2 <<< "$2") =~ ^[0-9]+$) && $(cut -d "t" -f2 <<< "$2") -gt 0 ]]
+		then
+			start=1
+			stop=$1
+			atom=$(cut -d "t" -f2 <<< "$2")
+		elif [[ -z "$2" ]]
+		then
+			start=1
+			stop=$1
+			atom=0
+		elif [[ !("$2" =~ ^[0-9]+$) ]]
+		then
+			echo "invalid second argument"
+			exit
+		else
+			if [[ "$3" == "at"* && ($(cut -d "t" -f2 <<< "$3") =~ ^[0-9]+$) && $(cut -d "t" -f2 <<< "$3") -gt 0 ]]
+			then
+				if (( $2 < $1 ))
+				then
+					echo "Last band ($2) cannot be smaller than starting band ($1) to draw!"
+					exit
+				elif [[ $1 != 0 ]]
+				then
+					start=$1
+					stop=$2
+					atom=$(cut -d "t" -f2 <<< "$3")
+				else
+					start=1
+					stop=$2
+					atom=$(cut -d "t" -f2 <<< "$3")
+				fi
+			elif [[ -z "$3" ]]
+			then
+				if (( $2 < $1 ))
+				then
+					echo "Last band ($2) cannot be smaller than starting band ($1) to draw!"
+					exit
+				elif [[ $1 != 0 ]]
+				then
+					start=$1
+					stop=$2
+					atom=0
+				else
+					start=1
+					stop=$2
+					atom=0
+				fi
+			else
+				echo "invalid third argument"
+				exit
+			fi
+		fi
+	fi
+fi
+
+if [[ ! -z "$4" ]]
+then
+	echo "Ignoring all arguments above three"
+fi
+
+# searching all subdirectories for FATBANDS files, storing them and sorting
+current_dir=$(pwd)
+all_files=()
+dir_of_files=()
+
+while IFS=  read -r -d $'\0'; do
+	all_files+=("$REPLY")
+done < <(find . -name 'PROCAR' -print0)
+
+dir_of_files=($(echo "${all_files[@]%/*}" | tr ' ' '\n' | sort -u | tr '\n' ' '))
+
+# we move to location of each found *FATBANDS* files
+for DIR in "${dir_of_files[@]}"
+do
+	cd ${DIR}
+	# check if data file exist and delete it
+	count=`ls -1 fatband* 2>/dev/null | wc -l`
+	if [ $count != 0 ];then
+		rm fatband*
+	fi
+	# check the max band number
+	bands=$(sed '2q;d' "PROCAR" | awk  '{print $8}')
+	if [ $stop != 0 ] && [ $stop -lt $bands ]; then
+		bands=$stop
+	fi
+	# and the number of atom
+	atom=$(sed '2q;d' "PROCAR" | awk  '{print $12}')
+	fermi=$(awk '{if($1=="E-fermi")print $3}' OUTCAR)
+	nelect=$(awk '{if($1=="NELECT")print $3}' OUTCAR)
+	nelect=${nelect%%.*}
+	start=$(($nelect-6))
+	bands=$(($nelect+6))
+	for at in $( seq 1 $atom )
+	do
+		# collect data band by band (VASP has really unpleasand file structure...)
+		for band in $( seq $start $bands )
+		do
+			awk -v band="$band" -v atom="$at"  -v fermi="$fermi" '
+			BEGIN{ion=0; printf "\n\n# k\tband_%d\ts\tp\td\n",band >> "fatband"atom".data"}
+			{
+				if($1=="k-point")
+				{
+					k=$2
+					k_x=$4
+					k_y=$5
+					k_z=$6
+				}
+				if($1=="band" && $2==band)
+				{
+					bnd=$5-fermi
+					ion=1
+					s=0
+					p=0
+					d=0
+				}
+				if($1=="tot" && ion==1)
+				{
+					ion=0
+					printf "%d\t%f\t%f\t%f\t%f\n",k,bnd,s,p,d >> "fatband"atom".data"
+				}
+				if( ion==1 && ($1==atom) && $1 ~ /^[0-9]+$/ )
+				{
+					s=s+$11
+				}
+			}' "PROCAR"
+		done
+		sed -i 1,2d "fatband"$at".data"
+		# drawing fatbands
+		gnuplot -e "set t cairolatex header \"\\\usepackage{tikz}\n\\\usetikzlibrary{fadings}\" standalone lw 2; set o 'fatband$at.tex'; set key noautotitle; set yrange [-5:5]; stats 'fatband$at.data' matrix every ::2::5 nooutput; scale=5; blocks = $bands-$start; plot for [in=0:blocks-1] 'fatband$at.data' i in u 1:2 w l lc rgb \"black\", for [in=0:blocks-1] 'fatband$at.data' i in u 1:2:(\$3*scale) with circles pt 7 ps 0.5 lc \"red\""
+		pdflatex "fatband$at.tex"
+	done
+	cd "$current_dir"
+done

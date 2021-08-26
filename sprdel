@@ -1,0 +1,3 @@
+#!/bin/bash
+
+rm *log *SCFSTART.dos *pot_new *-output *.e* *.o*

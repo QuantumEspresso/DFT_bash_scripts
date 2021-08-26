@@ -1,0 +1,12 @@
+#!/bin/bash
+#PBS -N GaN
+#PBS -l software=vasp
+#PBS -l walltime=4:00:00
+#PBS -l select=1:ncpus=8:mpiprocs=1:mem=6000MB
+cd "$PBS_O_WORKDIR"
+
+NSLOTS=`wc -l $PBS_NODEFILE`
+module load openmpi/1.10.1-intel15.0
+module load vasp/5.4.4-intel16.0
+
+mpirun vasp_ncl > log

@@ -1,0 +1,111 @@
+#!/bin/bash
+
+# Copyright: Norbert Janik (norbert.janik@protonmail.com)
+
+# to do: comparizon plot
+
+# it searches all subfolders and for all *_DOS files
+# script arguments are starting energy to plot, ending energy to plot
+
+# assigning provided arguments to variables
+if [[ -z "$1" ]]
+then
+	start=1
+	stop=0
+	com=0
+elif [[ "$1" == "com" ]]
+then
+	start=1
+	stop=0
+	com=1
+else
+	if [[ !("$1" =~ ^[0-9]+$) ]]
+	then
+		echo "Invalid first argument"
+		exit
+	else
+		if [[ "$2" == "com" ]]
+		then
+			start=1
+			stop=$1
+			com=1
+		elif [[ -z "$2" ]]
+		then
+			start=1
+			stop=$1
+			com=0
+		elif [[ !("$2" =~ ^[0-9]+$) ]]
+		then
+			echo "Invalid second argument"
+			exit
+		else
+			if [[ "$3" == "com" ]]
+			then
+				if (( $2 < $1 ))
+				then
+					echo "Last band ($2) cannot be smaller than starting band ($1) to draw!"
+					exit
+				elif [[ $1 != 0 ]]
+				then
+					start=$1
+					stop=$2
+					com=1
+				else
+					start=1
+					stop=$2
+					com=1
+				fi
+			elif [[ -z "$3" ]]
+			then
+				if (( $2 < $1 ))
+				then
+					echo "Last band ($2) cannot be smaller than starting band ($1) to draw!"
+					exit
+				elif [[ $1 != 0 ]]
+				then
+					start=$1
+					stop=$2
+					com=0
+				else
+					start=1
+					stop=$2
+					com=0
+				fi
+			else
+				echo "Invalid third argument"
+				exit
+			fi
+		fi
+	fi
+fi
+
+if [[ ! -z "$4" ]]
+then
+	echo "Ignoring all arguments above three"
+fi
+
+# searching all subdirectories for *out files, storing them and sorting
+current_dir=$(pwd)
+all_files=()
+dir_of_files=()
+
+while IFS=  read -r -d $'\0'; do
+	all_files+=("$REPLY")
+done < <(find . -name '*_DOS' -print0)
+
+dir_of_files=($(echo "${all_files[@]%/*}" | tr ' ' '\n' | sort -u | tr '\n' ' '))
+
+#for i in "${dir_of_files[@]}"; do
+#	echo ${i%/*}	# delete the part after last slash
+#	echo ${i##*/}	# retain the part after last slash
+#done
+
+# for all found *out files, we move to their location and prepare files with bands to plot
+for DIR in "${dir_of_files[@]}"
+do
+	cd ${DIR}
+	for FILE in *_DOS; do
+		gnuplot -e "set t pdfcairo;set o '$FILE.pdf';set title 'Orbital composition of $FILE'; set key noautotitle; set datafile commentschars \"#@&\"; plot '$FILE' u 1:2"
+	done
+	cd "$current_dir"
+done

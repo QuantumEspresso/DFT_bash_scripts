@@ -1,0 +1,32 @@
+#!/bin/bash
+
+# Copyright: Norbert Janik (norbert.janik@protonmail.com)
+
+# scirpt serches whole current directory tree for *2_EIG files and returns for each bamd gaps acording to awk content
+
+#find ./ -name '*2_EIG' -exec awk '{if(NR==4)ind=$1;if(NR==83){vb=$8;vb2=$6}if(NR==84)d=$1}END{print d-vb "\t" ind-vb "\t" ind-d "\t" vb2-vb}' {} \;
+
+array=()
+while IFS=  read -r -d $'\0'; do
+    array+=("$REPLY")
+done < <(find . -name '*2_EIG' -print0)
+if (( ${#array[@]} == 0 )); then
+	echo "No '*2_EIG' files have been found."
+	exit
+fi
+IFS=$'\n' sorted=($(sort <<<"${array[*]}"))
+unset IFS
+
+count=1
+for i in "${sorted[@]}"
+do
+	if [ $count -le 8 ]; then
+#		echo $i
+		awk '{if(NR==4)ind=$1;if(NR==83){vb=$8;vb2=$6}if(NR==84)d=$1}END{print d-vb "\t" ind-vb}' $i
+	else
+#		echo $i
+		awk '{if(NR==4)ind=$1;if(NR==83){vb=$8;vb2=$6}if(NR==84)d=$1}END{print vb2-vb "\t" ind-vb}' $i
+	fi
+	((count++))
+done
+
